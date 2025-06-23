@@ -2,6 +2,8 @@
 
 A market making bot for the Thalex exchange, providing automated quoting for perpetual futures.
 
+> 📖 **For detailed documentation on the behavior of the bot, see [BOT_BEHAVIOR.md](BOT_BEHAVIOR.md)**
+
 ## Setup
 
 ### 1. Virtual Environment
