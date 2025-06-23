@@ -135,13 +135,53 @@ class Thalex:
         self.ws: websockets.client = None
 
     async def receive(self):
-        return await self.ws.recv()
+        try:
+            if not self.connection_healthy():
+                raise websockets.exceptions.ConnectionClosedError(None, None, "Connection not healthy")
+            return await self.ws.recv()
+        except websockets.exceptions.ConnectionClosedError as e:
+            logging.error(f"WebSocket connection closed during receive: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error during receive: {e}")
+            raise
 
     def connected(self):
         return self.ws is not None and self.ws.state in [WsState.CONNECTING, WsState.OPEN]
 
+    def connection_healthy(self):
+        """Check if the connection is healthy and ready for use"""
+        if not self.connected():
+            return False
+        
+        # Additional health checks
+        try:
+            # Check if the websocket is in a good state
+            if hasattr(self.ws, 'closed') and self.ws.closed:
+                return False
+            
+            # Check if we can access the websocket state
+            if hasattr(self.ws, 'state'):
+                return self.ws.state in [WsState.CONNECTING, WsState.OPEN]
+            
+            return True
+        except Exception:
+            return False
+
     async def connect(self):
-        self.ws = await websockets.connect(self.net.value, ping_interval=5)
+        try:
+            # Add more robust WebSocket connection parameters
+            self.ws = await websockets.connect(
+                self.net.value, 
+                ping_interval=30,  # Send ping every 30 seconds
+                ping_timeout=10,   # Wait 10 seconds for pong response
+                close_timeout=10,  # Wait 10 seconds for close frame
+                max_size=2**20,    # 1MB max message size
+                compression=None   # Disable compression for better reliability
+            )
+        except Exception as e:
+            logging.error(f"Failed to connect to {self.net.value}: {e}")
+            raise
 
     async def disconnect(self):
         await self.ws.close()

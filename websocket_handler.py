@@ -24,31 +24,66 @@ class WebSocketHandler:
         self.is_running = False
     
     async def connect_and_authenticate(self):
-        """Establish connection and authenticate with the exchange"""
-        try:
-            self.logger.log_info("Starting quote loop - attempting connection...")
-            
-            if not self.tlx.connected():
-                self.logger.log_connection("Connecting to Thalex...")
-                await self.tlx.connect()
-                self.logger.log_connection("Connected successfully")
-            else:
-                self.logger.log_connection("Already connected")
-            
-            self.logger.log_auth("Attempting login...")
-            await self.tlx.login(keys.key_ids[cfg.network], keys.private_keys[cfg.network])
-            self.logger.log_auth("Login successful")
-            
-            self.logger.log_subscription("Setting up subscriptions...")
-            await self.tlx.set_cancel_on_disconnect(6)
-            await self.tlx.private_subscribe(["session.orders", "account.portfolio", "trades"])
-            self.logger.log_subscription("Subscriptions set up successfully")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.log_error(f"Error during connection and authentication: {e}", exc_info=True)
-            return False
+        """Connect to Thalex and authenticate"""
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                self.logger.log_info(f"Starting quote loop - attempting connection (attempt {attempt + 1}/{max_retries})...")
+                
+                if not self.tlx.connected():
+                    self.logger.log_connection("Connecting to Thalex...")
+                    await self.tlx.connect()
+                    self.logger.log_connection("Connected successfully")
+                else:
+                    self.logger.log_connection("Already connected")
+                
+                # Wait a moment for connection to stabilize
+                await asyncio.sleep(1)
+                
+                self.logger.log_auth("Attempting login...")
+                await self.tlx.login(keys.key_ids[cfg.network], keys.private_keys[cfg.network])
+                self.logger.log_auth("Login successful")
+                
+                # Wait a moment for authentication to complete
+                await asyncio.sleep(1)
+                
+                self.logger.log_subscription("Setting up subscriptions...")
+                await self.tlx.set_cancel_on_disconnect(6)
+                await self.tlx.private_subscribe(["session.orders", "account.portfolio", "trades"])
+                self.logger.log_subscription("Subscriptions set up successfully")
+                
+                return True
+                
+            except websockets.exceptions.ConnectionClosedError as e:
+                self.logger.log_error(f"Connection closed during setup (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    return False
+                    
+            except websockets.exceptions.WebSocketException as e:
+                self.logger.log_error(f"WebSocket error during setup (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    return False
+                    
+            except Exception as e:
+                self.logger.log_error(f"Error during connection and authentication (attempt {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    return False
+        
+        return False
     
     async def test_connection(self, instrument_name: str):
         """Test the connection and authentication"""
@@ -83,16 +118,68 @@ class WebSocketHandler:
     async def websocket_receiver(self):
         """Single coroutine responsible for receiving all websocket messages"""
         self.logger.log_info("Starting websocket receiver...")
+        consecutive_errors = 0
+        max_consecutive_errors = 3
+        
         while self.is_running:
             try:
+                # Check if connection is still valid
+                if not self.tlx.connection_healthy():
+                    self.logger.log_error("WebSocket connection lost, attempting to reconnect...")
+                    try:
+                        await self.tlx.connect()
+                        self.logger.log_info("WebSocket reconnected successfully")
+                        consecutive_errors = 0  # Reset error counter on successful reconnect
+                    except Exception as e:
+                        self.logger.log_error(f"Failed to reconnect WebSocket: {e}")
+                        consecutive_errors += 1
+                        if consecutive_errors >= max_consecutive_errors:
+                            self.logger.log_error(f"Too many consecutive connection failures ({consecutive_errors}), stopping receiver")
+                            break
+                        await asyncio.sleep(5)  # Wait before retry
+                        continue
+                
                 log.debug("Waiting for websocket message...")
                 msg = await self.tlx.receive()
                 self.logger.log_websocket_message(msg)
                 await self.message_queue.put(msg)
+                consecutive_errors = 0  # Reset error counter on successful message
+                
+            except websockets.exceptions.ConnectionClosedError as e:
+                consecutive_errors += 1
+                self.logger.log_error(f"WebSocket connection closed (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.log_error("Max consecutive connection errors reached, stopping receiver")
+                    await self.message_queue.put(None)
+                    break
+                
+                # Wait before attempting to reconnect
+                await asyncio.sleep(2)
+                
+            except websockets.exceptions.WebSocketException as e:
+                consecutive_errors += 1
+                self.logger.log_error(f"WebSocket error (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.log_error("Max consecutive WebSocket errors reached, stopping receiver")
+                    await self.message_queue.put(None)
+                    break
+                
+                await asyncio.sleep(2)
+                
             except Exception as e:
-                self.logger.log_error(f"Error in websocket receiver: {e}", exc_info=True)
-                await self.message_queue.put(None)
-                break
+                consecutive_errors += 1
+                self.logger.log_error(f"Unexpected error in websocket receiver (attempt {consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.log_error("Max consecutive errors reached, stopping receiver")
+                    await self.message_queue.put(None)
+                    break
+                
+                await asyncio.sleep(2)
+        
+        self.logger.log_info("WebSocket receiver stopped")
     
     async def process_message(self, msg: Any) -> bool:
         """Process a single websocket message"""
@@ -191,7 +278,7 @@ class WebSocketHandler:
         while self.is_running:
             try:
                 # Check connection status
-                if not self.tlx.connected():
+                if not self.tlx.connection_healthy():
                     self.logger.log_error("Ticker loop: Connection lost, attempting to reconnect...")
                     await self.tlx.connect()
                     self.logger.log_info("Ticker loop: Reconnected successfully")
