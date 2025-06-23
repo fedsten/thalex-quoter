@@ -14,7 +14,8 @@ class NotificationHandler:
                  on_position_update: Callable[[float], None],
                  on_trade_update: Callable[[], None],
                  on_pnl_update: Callable[[Optional[float], Optional[float]], None],
-                 on_ticker_update: Callable[[float, Optional[float], Optional[float]], None]):
+                 on_ticker_update: Callable[[float, Optional[float], Optional[float]], None],
+                 on_exchange_error: Callable[[dict], None]):
         """
         Initialize the notification handler.
         
@@ -26,6 +27,7 @@ class NotificationHandler:
             on_trade_update: Callback when trades occur
             on_pnl_update: Callback when PnL values change
             on_ticker_update: Callback when ticker data arrives
+            on_exchange_error: Callback for exchange-level errors
         """
         self.logger = logger
         self.instrument_name = instrument_name
@@ -34,6 +36,7 @@ class NotificationHandler:
         self.on_trade_update = on_trade_update
         self.on_pnl_update = on_pnl_update
         self.on_ticker_update = on_ticker_update
+        self.on_exchange_error = on_exchange_error
 
     async def handle_notification(self, channel: str, notification: Any):
         """Handle incoming websocket notifications"""
@@ -49,6 +52,10 @@ class NotificationHandler:
             await self._handle_account_summary(notification)
         elif channel == "ticker":
             await self._handle_ticker_update(notification)
+        elif channel == "error":
+            await self.on_exchange_error(notification)
+        else:
+            self.logger.log_unknown_notification(channel, notification)
 
     async def _handle_orders_update(self, notification: list):
         """Handle session.orders channel updates"""

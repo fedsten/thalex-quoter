@@ -52,7 +52,8 @@ class Quoter:
             on_position_update=self._on_position_update,
             on_trade_update=self._on_trade_update,
             on_pnl_update=self._on_pnl_update,
-            on_ticker_update=self._on_ticker_update
+            on_ticker_update=self._on_ticker_update,
+            on_exchange_error=self._on_exchange_error
         )
         
         # Setup websocket handler
@@ -83,6 +84,39 @@ class Quoter:
         # Recovery state
         self.bid_recovery_until: Optional[float] = None
         self.ask_recovery_until: Optional[float] = None
+        
+        # Desync recovery state
+        self.recovering_from_desync = False
+
+    async def _on_exchange_error(self, error_data: dict):
+        """Callback for handling exchange-level errors."""
+        message = error_data.get("message", "")
+        if "order not found" in message and not self.recovering_from_desync:
+            log.error("Received 'order not found' error. State desynchronization detected.")
+            asyncio.create_task(self.recover_from_state_desync())
+
+    async def recover_from_state_desync(self):
+        """Cancel all orders and reset internal state to recover from desync."""
+        self.recovering_from_desync = True
+        log.warning("====== RECOVERY MODE INITIATED ======")
+        log.warning("Cancelling all orders to resynchronize state...")
+
+        try:
+            await self.tlx.cancel_all()
+            log.info("cancel_all request sent successfully.")
+
+            # Clear local order cache
+            self.quotes.clear()
+            log.warning("Local order cache cleared.")
+            
+            # Allow some time for cancellation notifications to be processed
+            await asyncio.sleep(2) 
+            
+        except Exception as e:
+            log.error(f"Error during desync recovery: {e}", exc_info=True)
+        finally:
+            log.warning("====== RECOVERY MODE CONCLUDED ======")
+            self.recovering_from_desync = False
 
     # Notification callback methods
     def _on_order_update(self, client_order_id: str, order_data: dict):
