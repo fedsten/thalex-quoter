@@ -114,7 +114,3 @@ The bot creates detailed CSV logs in the `csv_logs/` directory with timestamps. 
 ## Development
 
 To modify the quoter logic, edit `not_so_simple_quoter.py`. The main class `Quoter` contains all the market making logic.
-
-## Support
-
-For issues or questions, check the Thalex documentation or contact the development team.

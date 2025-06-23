@@ -1,15 +1,15 @@
 [project]
-name = "thalex"
-version = "1.0.1"
+name = "thalex-quoter"
+version = "0.1.0"
 authors = [
-  {email="thalex_py@thalex.com"},
+    {name="Author"},
 ]
 maintainers = [
-  {email="thalex_py@thalex.com"},
+    {name="Maintainer"},
 ]
-description = "Thalex exchange connector"
+description = "A simple market making bot"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -23,7 +23,8 @@ dependencies = [
 
 
 [project.urls]
-Homepage = "https://github.com/thalextech/thalex_py"
+Homepage = ""
+Issues = ""
 
 [build-system]
 requires = ["hatchling"]
@@ -36,3 +37,8 @@ include = [
 
 [tool.black]
 line-length = 90
+
+[tool.setuptools.packages.find]
+include = [
+    "thalex/**/*"
+]
